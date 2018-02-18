@@ -1,6 +1,6 @@
 import numpy as np
 import random
-
+import cv2 as cv
 from baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 
 
@@ -35,10 +35,22 @@ class ReplayBuffer(object):
         for i in idxes:
             data = self._storage[i]
             obs_t, action, reward, obs_tp1, done = data
-            obses_t.append(np.array(obs_t, copy=False))
+            
+            ##########   Edit for ActiveVision Env ############
+            #load images from file
+            img1=cv.imread(obs_t["img_path"],flags=-1)
+            img1=cv.cvtColor(img1, cv.COLOR_BGRA2RGBA)
+            #stick target_id onto first pixel
+            img1[0,0,0]=obs_t["target_id"]
+            img2=cv.imread(obs_tp1["img_path"],flags=-1)
+            img2=cv.cvtColor(img2, cv.COLOR_BGRA2RGBA)
+            img2[0,0,0]=obs_tp1["target_id"]
+            ###################################################
+            
+            obses_t.append(img1)
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
-            obses_tp1.append(np.array(obs_tp1, copy=False))
+            obses_tp1.append(img2)
             dones.append(done)
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
 
