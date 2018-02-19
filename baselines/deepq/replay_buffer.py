@@ -38,13 +38,15 @@ class ReplayBuffer(object):
             
             ##########   Edit for ActiveVision Env ############
             #load images from file
-            img1=cv.imread(obs_t["img_path"],flags=-1)
+            #img1=cv.imread(obs_t["img_path"],flags=-1)
+            img1=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
             img1=cv.cvtColor(img1, cv.COLOR_BGRA2RGBA)
             #stick target_id onto first pixel
-            img1[0,0,0]=obs_t["target_id"]
-            img2=cv.imread(obs_tp1["img_path"],flags=-1)
+            #img1[0,0,0]=obs_t["target_id"]
+            #img2=cv.imread(obs_tp1["img_path"],flags=-1)
+            im2=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
             img2=cv.cvtColor(img2, cv.COLOR_BGRA2RGBA)
-            img2[0,0,0]=obs_tp1["target_id"]
+            #img2[0,0,0]=obs_tp1["target_id"]
             ###################################################
             
             obses_t.append(img1)
