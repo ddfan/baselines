@@ -5,7 +5,7 @@ import tensorflow as tf
 import zipfile
 import cloudpickle
 import numpy as np
-from scipy import misc
+import cv2 as cv
 
 import gym
 import baselines.common.tf_util as U
@@ -170,6 +170,7 @@ def learn(env,
     sess = tf.Session()
     sess.__enter__()
 
+
     # capture the shape outside the closure so that the env object is not serialized
     # by cloudpickle when serializing make_obs_ph
     observation_space_shape = env.observation_space.shape
@@ -214,6 +215,20 @@ def learn(env,
     U.initialize()
     update_target()
 
+    total_parameters = 0
+    for variable in tf.trainable_variables():
+        # shape is an array of tf.Dimension
+        shape = variable.get_shape()
+        #print(shape)
+        #print(len(shape))
+        variable_parameters = 1
+        for dim in shape:
+            #print(dim)
+            variable_parameters *= dim.value
+        #print(variable_parameters)
+        total_parameters += variable_parameters
+    print("Total number of parameters: ", total_parameters)
+    
     episode_rewards = [0.0]
     saved_mean_reward = None
     obs = env.reset()
@@ -243,7 +258,7 @@ def learn(env,
 
             ########### EDIT FOR ACTIVEVISION #################
             #action = act(np.array(obs)[None], update_eps=update_eps, **kwargs)[0]
-            img=misc.imread(obs["img_path"])
+            img=cv.imread(obs["img_path"],flags=-1)
             #stick target_id onto first pixel
             img[0,0,0]=obs["target_id"]
             img=np.expand_dims(img,axis=0)
