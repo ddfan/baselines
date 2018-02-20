@@ -1,8 +1,7 @@
 import numpy as np
 import random
-import cv2 as cv
 from baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
-
+from baselines.deepq.utils import load_img
 
 class ReplayBuffer(object):
     def __init__(self, size):
@@ -37,22 +36,19 @@ class ReplayBuffer(object):
             obs_t, action, reward, obs_tp1, done = data
             
             ##########   Edit for ActiveVision Env ############
-            #load images from file
-            #img1=cv.imread(obs_t["img_path"],flags=-1)
-            img1=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
-            img1=cv.cvtColor(img1, cv.COLOR_BGRA2RGBA)
-            #stick target_id onto first pixel
-            #img1[0,0,0]=obs_t["target_id"]
-            #img2=cv.imread(obs_tp1["img_path"],flags=-1)
-            im2=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
-            img2=cv.cvtColor(img2, cv.COLOR_BGRA2RGBA)
-            #img2[0,0,0]=obs_tp1["target_id"]
+            if isinstance(obs_t,dict):
+                img1=load_img(obs_t)
+                img2=load_img(obs_tp1)
+                obses_t.append(img1)
+                obses_tp1.append(img2)
+            else:
+                obses_t.append(obs_t)
+                obses_tp1.append(obs_tp1)
             ###################################################
             
-            obses_t.append(img1)
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
-            obses_tp1.append(img2)
+            
             dones.append(done)
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
 

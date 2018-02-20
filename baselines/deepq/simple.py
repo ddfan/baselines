@@ -5,7 +5,6 @@ import tensorflow as tf
 import zipfile
 import cloudpickle
 import numpy as np
-import cv2 as cv
 
 import gym
 import baselines.common.tf_util as U
@@ -14,7 +13,7 @@ from baselines import logger
 from baselines.common.schedules import LinearSchedule
 from baselines.deepq.build_graph import build_act, build_train
 from baselines.deepq.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
-from baselines.deepq.utils import BatchInput, load_state, save_state
+from baselines.deepq.utils import BatchInput, load_state, save_state, load_img
 
 
 class ActWrapper(object):
@@ -257,12 +256,12 @@ def learn(env,
                 kwargs['update_param_noise_scale'] = True
 
             ########### EDIT FOR ACTIVEVISION #################
-            #action = act(np.array(obs)[None], update_eps=update_eps, **kwargs)[0]
-            img=cv.imread(obs["img_path"],flags=-1)
-            #stick target_id onto first pixel
-            img[0,0,0]=obs["target_id"]
-            img=np.expand_dims(img,axis=0)
-            action = act(img, update_eps=update_eps, **kwargs)[0]
+            obs_input=[]
+            if isinstance(obs,dict):
+                obs_input=np.expand_dims(load_img(obs),axis=0)
+            else:
+                obs_input=np.array(obs)[None]
+            action = act(obs_input, update_eps=update_eps, **kwargs)[0]
             ######################################################
 
             env_action = action

@@ -1,6 +1,8 @@
 import os
 
 import tensorflow as tf
+import cv2 as cv
+import numpy as np
 
 # ================================================================
 # Saving variables
@@ -15,6 +17,13 @@ def save_state(fname):
     saver = tf.train.Saver()
     saver.save(tf.get_default_session(), fname)
 
+def load_img(obs):
+    img=cv.imread(obs["img_path"],flags=-1)
+    #img=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
+    img=cv.cvtColor(img, cv.COLOR_BGRA2RGBA)
+    #img=cv.resize(img,(224,224))
+    img[0,0,0]=obs["target_id"]
+    return img
 # ================================================================
 # Placeholders
 # ================================================================
