@@ -79,7 +79,7 @@ def initialize():
     new_variables = set(tf.global_variables()) - ALREADY_INITIALIZED
     ############### EDIT FOR ACTIVE VISION ###################
     # don't reinitialize convnet variables
-    new_variables=[var for var in new_variables if 'convnet' not in var.name]
+    new_variables=[var for var in new_variables if 'Mobilenet' not in var.name]
     #############################################################
     tf.get_default_session().run(tf.variables_initializer(new_variables))
     ALREADY_INITIALIZED.update(new_variables)
