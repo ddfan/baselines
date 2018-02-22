@@ -5,6 +5,7 @@ import os
 import functools
 import collections
 import multiprocessing
+import cv2 as cv
 
 def switch(condition, then_expression, else_expression):
     """Switches between two operations depending on a scalar value (int or bool).
@@ -265,3 +266,17 @@ def get_placeholder_cached(name):
 
 def flattenallbut0(x):
     return tf.reshape(x, [-1, intprod(x.get_shape().as_list()[1:])])
+
+def load_img(obs):
+    if isinstance(obs[0],dict):
+        imgs=np.empty((len(obs),224,224,3),dtype=np.uint8)
+        for i,ob in enumerate(obs):
+            img=cv.imread(ob["img_path"])
+            #img=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
+            img=cv.cvtColor(img, cv.COLOR_BGRA2RGBA)[0:224,0:224,0:3]
+            #img=cv.resize(img,(224,224))
+            img[0,0,0]=ob["target_id"]
+            imgs[i,...]=img
+        return imgs
+    else:
+        return obs

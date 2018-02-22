@@ -55,6 +55,8 @@ class Model(object):
             advs = rewards - values
             for step in range(len(obs)):
                 cur_lr = lr.value()
+
+            obs=tf_util.load_img(obs)
             td_map = {train_model.X:obs, A:actions, ADV:advs, R:rewards, LR:cur_lr}
             if states is not None:
                 td_map[train_model.S] = states
@@ -85,7 +87,13 @@ class Model(object):
         self.initial_state = step_model.initial_state
         self.save = save
         self.load = load
-        tf.global_variables_initializer().run(session=sess)
+        ############### EDIT FOR ACTIVE VISION ###################
+        # don't reinitialize convnet variables
+        new_variables = set(tf.global_variables()) - set()
+        new_variables=[var for var in new_variables if 'Mobilenet' not in var.name]
+        sess.run(tf.variables_initializer(new_variables))
+        #############################################################
+#        tf.global_variables_initializer().run(session=sess)
 
 class Runner(object):
 
@@ -95,9 +103,10 @@ class Runner(object):
         nh, nw, nc = env.observation_space.shape
         nenv = env.num_envs
         self.batch_ob_shape = (nenv*nsteps, nh, nw, nc)
-        self.obs = np.zeros((nenv, nh, nw, nc), dtype=np.uint8)
+        #self.obs = np.zeros((nenv, nh, nw, nc), dtype=np.uint8)
         self.nc = nc
         obs = env.reset()
+        self.obs=obs
         self.gamma = gamma
         self.nsteps = nsteps
         self.states = model.initial_state
@@ -115,14 +124,15 @@ class Runner(object):
             obs, rewards, dones, _ = self.env.step(actions)
             self.states = states
             self.dones = dones
-            for n, done in enumerate(dones):
-                if done:
-                    self.obs[n] = self.obs[n]*0
+            #for n, done in enumerate(dones):
+            #    if done:
+            #        self.obs[n] = self.obs[n]*0
             self.obs = obs
             mb_rewards.append(rewards)
         mb_dones.append(self.dones)
         #batch of steps to batch of rollouts
-        mb_obs = np.asarray(mb_obs, dtype=np.uint8).swapaxes(1, 0).reshape(self.batch_ob_shape)
+        #mb_obs = np.asarray(mb_obs, dtype=np.uint8).swapaxes(1, 0).reshape(self.batch_ob_shape)
+        mb_obs = [item for sublist in mb_obs for item in sublist]
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
         mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
         mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
@@ -145,7 +155,7 @@ class Runner(object):
         mb_masks = mb_masks.flatten()
         return mb_obs, mb_states, mb_rewards, mb_masks, mb_actions, mb_values
 
-def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, ent_coef=0.01, max_grad_norm=0.5, lr=7e-4, lrschedule='linear', epsilon=1e-5, alpha=0.99, gamma=0.99, log_interval=100):
+def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, ent_coef=0.01, max_grad_norm=0.5, lr=7e-4, lrschedule='linear', epsilon=1e-5, alpha=0.99, gamma=0.99, log_interval=10):
     tf.reset_default_graph()
     set_global_seeds(seed)
 
@@ -158,18 +168,27 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
 
     nbatch = nenvs*nsteps
     tstart = time.time()
+    reward_avg=0
+    cumulative_reward_avg=0
+    alpha=0.9999
     for update in range(1, total_timesteps//nbatch+1):
         obs, states, rewards, masks, actions, values = runner.run()
         policy_loss, value_loss, policy_entropy = model.train(obs, states, rewards, masks, actions, values)
         nseconds = time.time()-tstart
+        for rew in rewards:
+            reward_avg=(1-alpha)*reward_avg+alpha*rew
+        cumulative_reward_avg=(np.sum(rewards)+update*nbatch*cumulative_reward_avg)/(update*nbatch+nbatch)
+
         fps = int((update*nbatch)/nseconds)
         if update % log_interval == 0 or update == 1:
             ev = explained_variance(values, rewards)
-            logger.record_tabular("nupdates", update)
+            #logger.record_tabular("nupdates", update)
             logger.record_tabular("total_timesteps", update*nbatch)
             logger.record_tabular("fps", fps)
+            logger.record_tabular("exp weight rew", reward_avg)
+            logger.record_tabular("cum reward avg", cumulative_reward_avg)
             logger.record_tabular("policy_entropy", float(policy_entropy))
-            logger.record_tabular("value_loss", float(value_loss))
-            logger.record_tabular("explained_variance", float(ev))
+            #logger.record_tabular("value_loss", float(value_loss))
+            #logger.record_tabular("explained_variance", float(ev))
             logger.dump_tabular()
     env.close()
