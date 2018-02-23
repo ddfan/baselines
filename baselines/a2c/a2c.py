@@ -73,11 +73,7 @@ class Model(object):
             self.saver.save(sess,save_path+"/model")
 
         def load(load_path):
-            loaded_params = joblib.load(load_path)
-            restores = []
-            for p, loaded_p in zip(params, loaded_params):
-                restores.append(p.assign(loaded_p))
-            ps = sess.run(restores)
+            self.saver.restore(sess,load_path+"/model")
 
         self.train = train
         self.train_model = train_model
@@ -97,7 +93,7 @@ class Model(object):
 
 class Runner(object):
 
-    def __init__(self, env, model, nsteps=5, gamma=0.99):
+    def __init__(self, env, model, nsteps=5, gamma=0.99, render=False):
         self.env = env
         self.model = model
         nh, nw, nc = env.observation_space.shape
@@ -111,6 +107,7 @@ class Runner(object):
         self.nsteps = nsteps
         self.states = model.initial_state
         self.dones = [False for _ in range(nenv)]
+        self.render=render
 
     def run(self):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = [],[],[],[],[]
@@ -122,6 +119,9 @@ class Runner(object):
             mb_values.append(values)
             mb_dones.append(self.dones)
             obs, rewards, dones, _ = self.env.step(actions)
+            if self.render:
+                self.env.render()
+                time.sleep(0.1)
             self.states = states
             self.dones = dones
             #for n, done in enumerate(dones):
@@ -197,4 +197,40 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
             savepath = osp.join(logger.get_dir(), 'checkpoint%.5i'%update)
             print('Saving to', savepath)
             model.save(savepath)
+    env.close()
+
+def play(policy, env, seed, nsteps=5, total_timesteps=int(1e4), gamma=0.99, log_interval=10, render=False, load_path=None):
+    assert load_path is not None    
+
+    tf.reset_default_graph()
+    set_global_seeds(seed)
+
+    nenvs = env.num_envs
+    ob_space = env.observation_space
+    ac_space = env.action_space
+    model = Model(policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, total_timesteps=total_timesteps)
+
+    model.load(load_path)
+    runner = Runner(env, model, nsteps=nsteps, gamma=gamma, render=render)
+    nbatch = nenvs*nsteps
+    tstart = time.time()
+    reward_avg=0
+    cumulative_reward_avg=0
+    alpha=0.001
+    for update in range(1, total_timesteps//nbatch+1):
+        obs, states, rewards, masks, actions, values = runner.run()
+        nseconds = time.time()-tstart
+        for rew in rewards:
+            reward_avg=(1-alpha)*reward_avg+alpha*rew
+        cumulative_reward_avg=(np.sum(rewards)+update*nbatch*cumulative_reward_avg)/(update*nbatch+nbatch)
+
+        fps = int((update*nbatch)/nseconds)
+        if update % log_interval == 0 or update == 1:
+            ev = explained_variance(values, rewards)
+            #logger.record_tabular("nupdates", update)
+            logger.record_tabular("total_timesteps", update*nbatch)
+            logger.record_tabular("fps", fps)
+            logger.record_tabular("exp weight rew", reward_avg)
+            logger.record_tabular("cum reward avg", cumulative_reward_avg)
+            logger.dump_tabular()
     env.close()
