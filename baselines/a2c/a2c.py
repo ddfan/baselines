@@ -34,7 +34,7 @@ class Model(object):
 
         step_model = policy(sess, ob_space, ac_space, nenvs, 1, reuse=False)
         train_model = policy(sess, ob_space, ac_space, nenvs*nsteps, nsteps, reuse=True)
-
+        temp = set(tf.global_variables())
         neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=train_model.pi, labels=A)
         pg_loss = tf.reduce_mean(ADV * neglogpac)
         vf_loss = tf.reduce_mean(mse(tf.squeeze(train_model.vf), R))
@@ -83,13 +83,15 @@ class Model(object):
         self.initial_state = step_model.initial_state
         self.save = save
         self.load = load
+
         ############### EDIT FOR ACTIVE VISION ###################
         # don't reinitialize convnet variables
+        sess.run(tf.variables_initializer(set(tf.global_variables()) - temp))
         new_variables = set(tf.global_variables()) - set()
         new_variables=[var for var in new_variables if 'Mobilenet' not in var.name]
         sess.run(tf.variables_initializer(new_variables))
         #############################################################
-#        tf.global_variables_initializer().run(session=sess)
+
 
 class Runner(object):
 
@@ -156,7 +158,7 @@ class Runner(object):
         return mb_obs, mb_states, mb_rewards, mb_masks, mb_actions, mb_values
 
 def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, ent_coef=0.01, max_grad_norm=0.5,
-             lr=7e-4, lrschedule='linear', epsilon=1e-5, alpha=0.99, gamma=0.99, log_interval=10, save_interval=None):
+             lr=7e-4, lrschedule='linear', epsilon=1e-5, alpha=0.99, gamma=0.99, log_interval=10, save_interval=None, load_path=None):
     tf.reset_default_graph()
     set_global_seeds(seed)
 
@@ -166,6 +168,9 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
     model = Model(policy=policy, ob_space=ob_space, ac_space=ac_space, nenvs=nenvs, nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
         max_grad_norm=max_grad_norm, lr=lr, alpha=alpha, epsilon=epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule)
 
+    if load_path is not None:
+        model.load(load_path)
+        
     runner = Runner(env, model, nsteps=nsteps, gamma=gamma)
     nbatch = nenvs*nsteps
     tstart = time.time()
@@ -183,14 +188,14 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
         fps = int((update*nbatch)/nseconds)
         if update % log_interval == 0 or update == 1:
             ev = explained_variance(values, rewards)
-            #logger.record_tabular("nupdates", update)
+            logger.record_tabular("nupdates", update)
             logger.record_tabular("total_timesteps", update*nbatch)
             logger.record_tabular("fps", fps)
             logger.record_tabular("exp weight rew", reward_avg)
             logger.record_tabular("cum reward avg", cumulative_reward_avg)
             logger.record_tabular("policy_entropy", float(policy_entropy))
-            #logger.record_tabular("value_loss", float(value_loss))
-            #logger.record_tabular("explained_variance", float(ev))
+            logger.record_tabular("value_loss", float(value_loss))
+            logger.record_tabular("explained_variance", float(ev))
             logger.dump_tabular()
 
         if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir():
