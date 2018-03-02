@@ -88,7 +88,7 @@ class Model(object):
         # don't reinitialize convnet variables
         sess.run(tf.variables_initializer(set(tf.global_variables()) - temp))
         new_variables = set(tf.global_variables()) - set()
-        new_variables=[var for var in new_variables if 'Mobilenet' not in var.name]
+        new_variables=[var for var in new_variables if 'Mobilenet' not in var.name or 'RMSProp' in var.name]
         sess.run(tf.variables_initializer(new_variables))
         #############################################################
 
