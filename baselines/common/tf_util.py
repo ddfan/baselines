@@ -271,23 +271,24 @@ def load_img(obs):
     if isinstance(obs[0],dict):
         imgs=np.empty((len(obs),224,224,4),dtype=np.uint8)
         for i,ob in enumerate(obs):
-            img=cv.imread(ob["img_path"])
-            depth_name=ob["img_path"][:-5]+'3.png'
-            depth_name=depth_name.replace("jpg_rgb","high_res_depth")
+            # img=cv.imread(ob["img_path"])
+            # img=cv.cvtColor(img, cv.COLOR_BGR2RGB)
+            # depth_name=ob["img_path"][:-5]+'3.png'
+            # depth_name=depth_name.replace("jpg_rgb","high_res_depth")
             
-            try:
-                depth_data=cv.imread(depth_name)[:,:,0:1]
-            except:
-                depth_data=img[:,:,0:1]
-            img_inp=np.expand_dims(img,axis=0)
-            depth_data=np.expand_dims(depth_data,axis=0)
-            final_img=np.concatenate([img_inp,depth_data],axis=-1)
-            #print(img.shape)
-            #img=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
-            #img=cv.cvtColor(img, cv.COLOR_BGRA2RGBA)#[0:224,0:224,0:3]
-            #print(ob["img_path"])
-            #img=cv.resize(img,(224,224))
+            # try:
+            #     depth_data=cv.imread(depth_name)[:,:,0:1]
+            # except:
+            #     depth_data=img[:,:,0:1]
+            # img_inp=np.expand_dims(img,axis=0)
+            # depth_data=np.expand_dims(depth_data,axis=0)
+            # final_img=np.concatenate([img_inp,depth_data],axis=-1)
+
+            final_img=np.empty((224,224,4),dtype=np.uint8)
             final_img[0,0,0]=ob["target_id"]
+            final_img[1,0,0]=round(ob["score"]*255)
+            final_img[2,0,0]=round(ob["xpos"]*255)
+            final_img[3,0,0]=round(ob["ypos"]*255)
             imgs[i,...]=final_img
         return imgs
     else:

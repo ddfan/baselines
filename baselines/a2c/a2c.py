@@ -84,15 +84,15 @@ class Model(object):
         self.save = save
         self.load = load
 
-        ############### EDIT FOR ACTIVE VISION ###################
-        # don't reinitialize convnet variables
-        sess.run(tf.variables_initializer(set(tf.global_variables()) - temp))
-        new_variables = set(tf.global_variables()) - set()
-        new_variables=[var for var in new_variables if ('Mobilenet' not in var.name and 'fullcnn' not in var.name) or 'RMSProp' in var.name]
-        # for var in new_variables:
-        #     print(var.name)
-        sess.run(tf.variables_initializer(new_variables))
-        #############################################################
+        # ############### EDIT FOR ACTIVE VISION ###################
+        # # don't reinitialize convnet variables
+        # sess.run(tf.variables_initializer(set(tf.global_variables()) - temp))
+        # new_variables = set(tf.global_variables()) - set()
+        # new_variables=[var for var in new_variables if ('Mobilenet' not in var.name and 'fullcnn' not in var.name) or 'RMSProp' in var.name]
+        # # for var in new_variables:
+        # #     print(var.name)
+        # sess.run(tf.variables_initializer(new_variables))
+        # #############################################################
 
 
 class Runner(object):
@@ -177,7 +177,7 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
     nbatch = nenvs*nsteps
     tstart = time.time()
     reward_avg=0
-    cumulative_reward_avg=0
+    # cumulative_reward_avg=0
     alpha=0.001
     for update in range(1, total_timesteps//nbatch+1):
         obs, states, rewards, masks, actions, values = runner.run()
@@ -185,7 +185,7 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
         nseconds = time.time()-tstart
         for rew in rewards:
             reward_avg=(1-alpha)*reward_avg+alpha*rew
-        cumulative_reward_avg=(np.sum(rewards)+update*nbatch*cumulative_reward_avg)/(update*nbatch+nbatch)
+        # cumulative_reward_avg=(np.sum(rewards)+update*nbatch*cumulative_reward_avg)/(update*nbatch+nbatch)
 
         fps = int((update*nbatch)/nseconds)
         if update % log_interval == 0 or update == 1:
@@ -194,7 +194,7 @@ def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, e
             logger.record_tabular("total_timesteps", update*nbatch)
             logger.record_tabular("fps", fps)
             logger.record_tabular("exp weight rew", reward_avg)
-            logger.record_tabular("cum reward avg", cumulative_reward_avg)
+            logger.record_tabular("reward", np.sum(rewards))
             logger.record_tabular("policy_entropy", float(policy_entropy))
             logger.record_tabular("value_loss", float(value_loss))
             logger.record_tabular("explained_variance", float(ev))
@@ -229,7 +229,7 @@ def play(policy, env, seed, nsteps=5, total_timesteps=int(1e4), gamma=0.99, log_
         nseconds = time.time()-tstart
         for rew in rewards:
             reward_avg=(1-alpha)*reward_avg+alpha*rew
-        cumulative_reward_avg=(np.sum(rewards)+update*nbatch*cumulative_reward_avg)/(update*nbatch+nbatch)
+        #cumulative_reward_avg=(np.sum(rewards)+update*nbatch*cumulative_reward_avg)/(update*nbatch+nbatch)
 
         fps = int((update*nbatch)/nseconds)
         if update % log_interval == 0 or update == 1:
@@ -238,6 +238,6 @@ def play(policy, env, seed, nsteps=5, total_timesteps=int(1e4), gamma=0.99, log_
             logger.record_tabular("total_timesteps", update*nbatch)
             logger.record_tabular("fps", fps)
             logger.record_tabular("exp weight rew", reward_avg)
-            logger.record_tabular("cum reward avg", cumulative_reward_avg)
+            logger.record_tabular("reward", np.sum(rewards))
             logger.dump_tabular()
     env.close()
