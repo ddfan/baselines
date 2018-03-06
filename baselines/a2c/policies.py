@@ -7,13 +7,16 @@ def nature_cnn(unscaled_images):
     """
     CNN from Nature paper.
     """
-    scaled_images = tf.cast(unscaled_images, tf.float32) / 255.
-    activ = tf.nn.relu
+    scaled_images = (tf.cast(unscaled_images, tf.float32) / 255 - 0.5)*2
+    activ = tf.nn.leaky_relu
     h = activ(conv(scaled_images, 'c1', nf=32, rf=8, stride=4, init_scale=np.sqrt(2)))
     h2 = activ(conv(h, 'c2', nf=64, rf=4, stride=2, init_scale=np.sqrt(2)))
     h3 = activ(conv(h2, 'c3', nf=64, rf=3, stride=1, init_scale=np.sqrt(2)))
-    h3 = conv_to_fc(h3)
-    return activ(fc(h3, 'fc1', nh=512, init_scale=np.sqrt(2)))
+    h4 = activ(conv(h3, 'c4', nf=64, rf=3, stride=1, init_scale=np.sqrt(2)))
+    #h5 = activ(conv(h4, 'c5', nf=64, rf=3, stride=1, init_scale=np.sqrt(2)))
+    hout = conv_to_fc(h4)
+    #return activ(fc(h3, 'fc1', nh=512, init_scale=np.sqrt(2)))
+    return hout
 
 class LnLstmPolicy(object):
     def __init__(self, sess, ob_space, ac_space, nbatch, nsteps, nlstm=256, reuse=False):

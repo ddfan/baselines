@@ -269,14 +269,26 @@ def flattenallbut0(x):
 
 def load_img(obs):
     if isinstance(obs[0],dict):
-        imgs=np.empty((len(obs),224,224,3),dtype=np.uint8)
+        imgs=np.empty((len(obs),224,224,4),dtype=np.uint8)
         for i,ob in enumerate(obs):
             img=cv.imread(ob["img_path"])
+            depth_name=ob["img_path"][:-5]+'3.png'
+            depth_name=depth_name.replace("jpg_rgb","high_res_depth")
+            
+            try:
+                depth_data=cv.imread(depth_name)[:,:,0:1]
+            except:
+                depth_data=img[:,:,0:1]
+            img_inp=np.expand_dims(img,axis=0)
+            depth_data=np.expand_dims(depth_data,axis=0)
+            final_img=np.concatenate([img_inp,depth_data],axis=-1)
+            #print(img.shape)
             #img=cv.imread('/home/aeuser/Documents/active_vision_dataset_processing/cat.jpg')
-            img=cv.cvtColor(img, cv.COLOR_BGRA2RGBA)[0:224,0:224,0:3]
+            #img=cv.cvtColor(img, cv.COLOR_BGRA2RGBA)#[0:224,0:224,0:3]
+            #print(ob["img_path"])
             #img=cv.resize(img,(224,224))
-            img[0,0,0]=ob["target_id"]
-            imgs[i,...]=img
+            final_img[0,0,0]=ob["target_id"]
+            imgs[i,...]=final_img
         return imgs
     else:
         return obs
