@@ -71,6 +71,9 @@ class Model(object):
         def save(save_path):
             make_path(save_path)
             self.saver.save(sess,save_path+"/model")
+#             ps = sess.run(params)
+#             make_path(osp.dirname(save_path))
+#             joblib.dump(ps, save_path)
 
         def load(load_path):
             self.saver.restore(sess,load_path+"/model")
