@@ -5,7 +5,6 @@ model = load_model_from_path("/home/aeuser/Documents/mujoco-py/xmls/fetch/main.x
 sim = MjSim(model)
 viewer = MjViewer(sim)
 
-
 import os
 import sys
 
