@@ -46,12 +46,13 @@ class Model(object):
         if max_grad_norm is not None:
             grads, grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
         grads = list(zip(grads, params))
-        trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=alpha, epsilon=epsilon)
+        # trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=alpha, epsilon=epsilon)
+        trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=epsilon)
         _train = trainer.apply_gradients(grads)
 
         lr = Scheduler(v=lr, nvalues=total_timesteps, schedule=lrschedule)
 
-        self.saver = tf.train.Saver()
+        self.saver = tf.train.Saver(max_to_keep=999999)
         def train(obs, states, rewards, masks, actions, values):
             advs = rewards - values
             for step in range(len(obs)):
@@ -84,15 +85,15 @@ class Model(object):
         self.save = save
         self.load = load
 
-        # ############### EDIT FOR ACTIVE VISION ###################
-        # # don't reinitialize convnet variables
-        # sess.run(tf.variables_initializer(set(tf.global_variables()) - temp))
-        # new_variables = set(tf.global_variables()) - set()
-        # new_variables=[var for var in new_variables if ('Mobilenet' not in var.name and 'fullcnn' not in var.name) or 'RMSProp' in var.name]
-        # # for var in new_variables:
-        # #     print(var.name)
-        # sess.run(tf.variables_initializer(new_variables))
-        # #############################################################
+        ############### EDIT FOR ACTIVE VISION ###################
+        # don't reinitialize convnet variables
+        sess.run(tf.variables_initializer(set(tf.global_variables()) - temp))
+        new_variables = set(tf.global_variables()) - set()
+        new_variables=[var for var in new_variables if ('Mobilenet' not in var.name and 'fullcnn' not in var.name) or 'RMSProp' in var.name]
+        # for var in new_variables:
+        #     print(var.name)
+        sess.run(tf.variables_initializer(new_variables))
+        #############################################################
 
 
 class Runner(object):
@@ -125,7 +126,7 @@ class Runner(object):
             obs, rewards, dones, _ = self.env.step(actions)
             if self.render:
                 self.env.render()
-                time.sleep(0.1)
+                time.sleep(0.01)
             self.states = states
             self.dones = dones
             #for n, done in enumerate(dones):
@@ -159,8 +160,8 @@ class Runner(object):
         mb_masks = mb_masks.flatten()
         return mb_obs, mb_states, mb_rewards, mb_masks, mb_actions, mb_values
 
-def learn(policy, env, seed, nsteps=5, total_timesteps=int(80e6), vf_coef=0.5, ent_coef=0.01, max_grad_norm=0.5,
-             lr=7e-4, lrschedule='linear', epsilon=1e-5, alpha=0.99, gamma=0.99, log_interval=10, save_interval=None, load_path=None):
+def learn(policy, env, seed, nsteps=20, total_timesteps=int(50e6), vf_coef=0.9, ent_coef=0.01, max_grad_norm=0.05,
+             lr=1e-4, lrschedule='double_middle_drop', epsilon=0.0001, alpha=0.99, gamma=0.99, log_interval=10, save_interval=None, load_path=None):
     tf.reset_default_graph()
     set_global_seeds(seed)
 
