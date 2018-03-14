@@ -129,9 +129,8 @@ class LINSOLV(object):
         self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
         self.normalized_critic_with_actor_tf = critic(normalized_obs0, self.actor_tf, reuse=True)
         self.critic_with_actor_tf = denormalize(tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
-        # Q_obs1 = denormalize(target_critic(normalized_obs1, target_actor(normalized_obs1)), self.ret_rms)
-        Q_obs1 = denormalize(target_critic(normalized_obs1), self.ret_rms)
-        self.target_Q = -(self.rewards+tf.reduce_sum(tf.square(self.actions),axis=-1))*(1. - self.terminals1) * gamma * Q_obs1
+        Q_obs1 = denormalize(target_critic(normalized_obs1, target_actor(normalized_obs1)), self.ret_rms)
+        self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
 
         # Set up parts.
         if self.param_noise is not None:
@@ -180,7 +179,10 @@ class LINSOLV(object):
     def setup_critic_optimizer(self):
         logger.info('setting up critic optimizer')
         normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms), self.return_range[0], self.return_range[1])
-        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
+        # self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
+        ## LINSOLV EDIT
+        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - tf.log(tf.reduce_mean(tf.exp(normalized_critic_target_tf))) ))
+
         if self.critic_l2_reg > 0.:
             critic_reg_vars = [var for var in self.critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
             for var in critic_reg_vars:

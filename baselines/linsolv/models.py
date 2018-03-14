@@ -71,6 +71,9 @@ class Critic(Model):
             x = tf.layers.dense(x, 1, kernel_initializer=tf.random_uniform_initializer(minval=-3e-3, maxval=3e-3))
         return x
 
+    def grad(self,obs,action):
+        output=self.__call__(tf.stop_gradient(obs),tf.stop_gradient(action),reuse=True)
+        tf.gradients(output,action)
     @property
     def output_vars(self):
         output_vars = [var for var in self.trainable_vars if 'output' in var.name]
