@@ -76,7 +76,7 @@ class Critic(Model):
         return output_vars
 
 class LinSolvActorCritic(Model):
-    def __init__(self, name='actorcritic', layer_norm=True):
+    def __init__(self, nb_actions, name='actorcritic', layer_norm=True):
         super(LinSolvActorCritic, self).__init__(name=name)
         self.layer_norm = layer_norm
         self.nb_actions = nb_actions
@@ -91,7 +91,6 @@ class LinSolvActorCritic(Model):
             if self.layer_norm:
                 x = tc.layers.layer_norm(x, center=True, scale=True)
             x = tf.nn.relu(x)
-
             x = tf.concat([x, action], axis=-1)
             x = tf.layers.dense(x, 64)
             if self.layer_norm:
@@ -102,19 +101,11 @@ class LinSolvActorCritic(Model):
             
             if return_action:
                 #calculate action as gradient of critic w.r.t action input, scaled.
-                all_action_out=[]
-                for n in range(obs.shape[0]):
-                    action_out=[]
-                    for i in range(self.nb_actions):
-                        a=tf.gradients(q[n,i],action)
-                        action_out.append(a)
-                    all_actions_out.append(tf.concat(action_out))
-                all_actions=tf.stack(all_actions_out)
-
+                all_actions=tf.map_fn(lambda q_: tf.concat([tf.gradients(q_[i],action) for i in range(self.nb_actions)],axis=0), q)
                 if rescale:
-                scale_action=tf.get_variable('scale_action',[self.nb_actions])
-                shift_action=tf.get_variable('shift_action',[self.nb_actions])
-                all_actions=tf.multiply(all_actions,scale_action)+shift_action
+                    scale_action=tf.get_variable('scale_action',[self.nb_actions])
+                    shift_action=tf.get_variable('shift_action',[self.nb_actions])
+                    all_actions=tf.multiply(all_actions,scale_action)+shift_action
 
                 return q,all_actions
 

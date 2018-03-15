@@ -16,7 +16,7 @@ from baselines.common.misc_util import (
     boolean_flag,
 )
 import baselines.linsolv.training as training
-from baselines.linsolv.models import Actor, Critic, LinSolvActor
+from baselines.linsolv.models import Actor, Critic, LinSolvActorCritic
 from baselines.linsolv.memory import Memory
 from baselines.linsolv.noise import *
 
@@ -24,7 +24,7 @@ import gym
 import tensorflow as tf
 from mpi4py import MPI
 
-def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
+def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs):
     # Configure things.
     rank = MPI.COMM_WORLD.Get_rank()
     if rank != 0:
@@ -45,6 +45,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
     action_noise = None
     param_noise = None
     action_process = None
+    actor=None
+    critic=None
     nb_actions = env.action_space.shape[-1]
     for current_noise_type in noise_type.split(','):
         current_noise_type = current_noise_type.strip()
@@ -65,8 +67,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
     # Configure components.
     memory = Memory(limit=int(1e6), action_shape=env.action_space.shape, observation_shape=env.observation_space.shape)
     if use_linsolv:
-        actorcritic = LinSolvActor(critic,nb_actions, layer_norm=layer_norm)
-        action_process=OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
+        actorcritic = LinSolvActorCritic(nb_actions, layer_norm=layer_norm)
+        action_process = OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
     else:
         actor = Actor(nb_actions, layer_norm=layer_norm)
         critic = Critic(layer_norm=layer_norm)
@@ -84,7 +86,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
     if rank == 0:
         start_time = time.time()
     training.train(env=env, eval_env=eval_env, param_noise=param_noise,
-        action_noise=action_noise, actor=actor, critic=critic, memory=memory, actorcritic=actorcritic, action_process=action_process **kwargs)
+        action_noise=action_noise, actor=actor, critic=critic, memory=memory, actorcritic=actorcritic, action_process=action_process, use_linsolv=use_linsolv, **kwargs)
     env.close()
     if eval_env is not None:
         eval_env.close()
@@ -95,7 +97,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
 def parse_args():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--env-id', type=str, default='Pendulum-v0')
+    parser.add_argument('--env-id', type=str, default='Swimmer-v2')
     boolean_flag(parser, 'render-eval', default=False)
     boolean_flag(parser, 'layer-norm', default=True)
     boolean_flag(parser, 'render', default=False)
@@ -115,7 +117,7 @@ def parse_args():
     parser.add_argument('--nb-train-steps', type=int, default=50)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-eval-steps', type=int, default=1000)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-rollout-steps', type=int, default=1000)  # per epoch cycle and MPI worker
-    parser.add_argument('--noise-type', type=str, default='oulinsolv_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
+    parser.add_argument('--noise-type', type=str, default='normal_0.001')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--num-timesteps', type=int, default=None)
     boolean_flag(parser, 'evaluation', default=True)
     boolean_flag(parser, 'save-policies', default=True)
