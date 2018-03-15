@@ -81,7 +81,7 @@ class LinSolvActorCritic(Model):
         self.layer_norm = layer_norm
         self.nb_actions = nb_actions
 
-    def __call__(self, obs, action, reuse=False, return_action=False):
+    def __call__(self, obs, action, reuse=False, rescale=False, return_action=False):
         with tf.variable_scope(self.name) as scope:
             if reuse:
                 scope.reuse_variables()
@@ -99,21 +99,27 @@ class LinSolvActorCritic(Model):
             x = tf.nn.relu(x)
 
             q = tf.layers.dense(x, 1, kernel_initializer=tf.random_uniform_initializer(minval=-3e-3, maxval=3e-3))
+            
+            if return_action:
+                #calculate action as gradient of critic w.r.t action input, scaled.
+                all_action_out=[]
+                for n in range(obs.shape[0]):
+                    action_out=[]
+                    for i in range(self.nb_actions):
+                        a=tf.gradients(q[n,i],action)
+                        action_out.append(a)
+                    all_actions_out.append(tf.concat(action_out))
+                all_actions=tf.stack(all_actions_out)
 
-            #calculate action as gradient of critic w.r.t action input, scaled.
-            all_action_out=[]
-            for n in range(obs.shape[0]):
-                action_out=[]
-                for i in range(self.nb_actions):
-                    a=tf.gradients(q[n,i],action)
-                    action_out.append(a)
-                all_actions_out.append(tf.concat(action_out))
-            all_actions=tf.stack(all_actions_out)
+                if rescale:
+                scale_action=tf.get_variable('scale_action',[self.nb_actions])
+                shift_action=tf.get_variable('shift_action',[self.nb_actions])
+                all_actions=tf.multiply(all_actions,scale_action)+shift_action
 
-        if return_action:
-            return q,all_actions
-        else:
-            return q
+                return q,all_actions
+
+            else:
+                return q
 
     @property
     def output_vars(self):

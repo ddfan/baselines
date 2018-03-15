@@ -72,6 +72,7 @@ class LINSOLV(object):
         self.terminals1 = tf.placeholder(tf.float32, shape=(None, 1), name='terminals1')
         self.rewards = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
         self.actions = tf.placeholder(tf.float32, shape=(None,) + action_shape, name='actions')
+        self.actions1 = tf.placeholder(tf.float32, shape=(None,) + action_shape, name='actions1')
         self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
         self.param_noise_stddev = tf.placeholder(tf.float32, shape=(), name='param_noise_stddev')
 
@@ -126,15 +127,17 @@ class LINSOLV(object):
             target_actorcritic.name = 'target_actorcritic'
             self.target_actorcritic = target_actorcritic
 
-            self.actor_tf = actorcritic(normalized_obs0,self.actions,rescale=True)
-            self.normalized_critic_with_actor_tf = actorcritic(normalized_obs0, self.actor_tf, rescale=False, reuse=True)
-            self.critic_with_actor_tf = tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]) / self.ret_rms.std
+            # setup stuff for actor loss
+            self.normalized_critic_tf, self.actor_tf = actorcritic(normalized_obs0,self.actions,rescale=True,return_action=True)
+            _,self.normalized_unscaled_critic_with_actor_tf = actorcritic(normalized_obs0, self.actor_tf, rescale=False, reuse=True)            
+            self.unscaled_critic_with_actor_tf = tf.clip_by_value(self.normalized_unscaled_critic_with_actor_tf, self.return_range[0], self.return_range[1]) / self.ret_rms.std
+            self.critic_with_actor_tf=tf.stop_gradient(self.unscaled_critic_with_actor_tf) * self.actor_tf
 
-
-            self.normalized_critic_tf = actorcritic(normalized_obs0, self.actions)
+            # setup stuff for critic loss
             self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
             Q_obs1 = denormalize(target_actorcritic(normalized_obs1, target_actorcritic(normalized_obs1,self.actions1)), self.ret_rms)
             self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
+
         else:
             # Create target networks.
             target_actor = copy(actor)
@@ -155,10 +158,6 @@ class LINSOLV(object):
         # Set up parts.
         if self.param_noise is not None:
             self.setup_param_noise(normalized_obs0)
-        if use_linsolv:
-            self.setup_actorcritic_optimizer()
-            self.setup_critic_optimizer()
-        else:
             self.setup_actor_optimizer()
             self.setup_critic_optimizer()
         if self.normalize_returns and self.enable_popart:
@@ -198,39 +197,6 @@ class LINSOLV(object):
         logger.info('  actor params: {}'.format(actor_nb_params))
         self.actor_grads = U.flatgrad(self.actor_loss, self.actor.trainable_vars, clip_norm=self.clip_norm)
         self.actor_optimizer = MpiAdam(var_list=self.actor.trainable_vars,
-            beta1=0.9, beta2=0.999, epsilon=1e-08)
-
-    def setup_actorcritic_optimizer(self):
-        logger.info('setting up actor optimizer')
-        self.actor_loss = -tf.reduce_mean(self.critic_with_actor_tf)
-        actor_shapes = [var.get_shape().as_list() for var in self.actor.trainable_vars]
-        actor_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in actor_shapes])
-        logger.info('  actor shapes: {}'.format(actor_shapes))
-        logger.info('  actor params: {}'.format(actor_nb_params))
-        self.actor_grads = U.flatgrad(self.actor_loss, self.actor.trainable_vars, clip_norm=self.clip_norm)
-        self.actor_optimizer = MpiAdam(var_list=self.actor.trainable_vars,
-            beta1=0.9, beta2=0.999, epsilon=1e-08)
-
-        logger.info('setting up critic optimizer')
-        normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms), self.return_range[0], self.return_range[1])
-        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
-
-        if self.critic_l2_reg > 0.:
-            critic_reg_vars = [var for var in self.critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
-            for var in critic_reg_vars:
-                logger.info('  regularizing: {}'.format(var.name))
-            logger.info('  applying l2 regularization with {}'.format(self.critic_l2_reg))
-            critic_reg = tc.layers.apply_regularization(
-                tc.layers.l2_regularizer(self.critic_l2_reg),
-                weights_list=critic_reg_vars
-            )
-            self.critic_loss += critic_reg
-        critic_shapes = [var.get_shape().as_list() for var in self.critic.trainable_vars]
-        critic_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in critic_shapes])
-        logger.info('  critic shapes: {}'.format(critic_shapes))
-        logger.info('  critic params: {}'.format(critic_nb_params))
-        self.critic_grads = U.flatgrad(self.critic_loss, self.critic.trainable_vars, clip_norm=self.clip_norm)
-        self.critic_optimizer = MpiAdam(var_list=self.critic.trainable_vars,
             beta1=0.9, beta2=0.999, epsilon=1e-08)
 
     def setup_critic_optimizer(self):
