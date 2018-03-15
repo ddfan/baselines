@@ -40,11 +40,14 @@ def array_min2d(x):
 
 
 class Memory(object):
-    def __init__(self, limit, action_shape, observation_shape):
+    def __init__(self, limit, action_shape, observation_shape, sarsa=False):
         self.limit = limit
+        self.sarsa=sarsa
 
         self.observations0 = RingBuffer(limit, shape=observation_shape)
         self.actions = RingBuffer(limit, shape=action_shape)
+        if self.sarsa:
+            self.actions1 = RingBuffer(limit, shape=action_shape)
         self.rewards = RingBuffer(limit, shape=(1,))
         self.terminals1 = RingBuffer(limit, shape=(1,))
         self.observations1 = RingBuffer(limit, shape=observation_shape)
@@ -56,24 +59,39 @@ class Memory(object):
         obs0_batch = self.observations0.get_batch(batch_idxs)
         obs1_batch = self.observations1.get_batch(batch_idxs)
         action_batch = self.actions.get_batch(batch_idxs)
+        if self.sarsa:
+            action1_batch = self.actions1.get_batch(batch_idxs)
         reward_batch = self.rewards.get_batch(batch_idxs)
         terminal1_batch = self.terminals1.get_batch(batch_idxs)
 
-        result = {
-            'obs0': array_min2d(obs0_batch),
-            'obs1': array_min2d(obs1_batch),
-            'rewards': array_min2d(reward_batch),
-            'actions': array_min2d(action_batch),
-            'terminals1': array_min2d(terminal1_batch),
-        }
+        if self.sarsa:
+            result = {
+                'obs0': array_min2d(obs0_batch),
+                'obs1': array_min2d(obs1_batch),
+                'rewards': array_min2d(reward_batch),
+                'actions': array_min2d(action_batch),
+                'actions1': array_min2d(action1_batch),
+                'terminals1': array_min2d(terminal1_batch),
+            }
+        else:
+            result = {
+                'obs0': array_min2d(obs0_batch),
+                'obs1': array_min2d(obs1_batch),
+                'rewards': array_min2d(reward_batch),
+                'actions': array_min2d(action_batch),
+                'terminals1': array_min2d(terminal1_batch),
+            }
         return result
 
-    def append(self, obs0, action, reward, obs1, terminal1, training=True):
+    def append(self, obs0, action, reward, obs1, terminal1, action1=None, training=True):
         if not training:
             return
         
         self.observations0.append(obs0)
         self.actions.append(action)
+        if self.sarsa:
+            assert action1 is not None
+            self.actions1.append(action1)
         self.rewards.append(reward)
         self.observations1.append(obs1)
         self.terminals1.append(terminal1)

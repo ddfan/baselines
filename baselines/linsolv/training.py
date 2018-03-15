@@ -23,7 +23,7 @@ def mpi_average(value):
 def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, param_noise, actor, critic,
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
     popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, batch_size, memory,
-    tau=0.01, eval_env=None, param_noise_adaption_interval=50, save_policies=False, policy_save_interval=10, use_linsolv=False):
+    tau=0.01, eval_env=None, param_noise_adaption_interval=50, save_policies=False, policy_save_interval=10, use_linsolv=False, actorcritic=None):
     rank = MPI.COMM_WORLD.Get_rank()
 
     latest_policy_path = os.path.join(logger.get_dir(), 'policy_latest')
@@ -37,7 +37,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         gamma=gamma, tau=tau, normalize_returns=normalize_returns, normalize_observations=normalize_observations,
         batch_size=batch_size, action_noise=action_noise, param_noise=param_noise, critic_l2_reg=critic_l2_reg,
         actor_lr=actor_lr, critic_lr=critic_lr, enable_popart=popart, clip_norm=clip_norm,
-        reward_scale=reward_scale, use_linsolv=use_linsolv)
+        reward_scale=reward_scale, use_linsolv=use_linsolv, actorcritic=actorcritic, action_process=action_process)
     logger.info('Using agent with the following configuration:')
     logger.info(str(agent.__dict__.items()))
 
@@ -78,12 +78,18 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         epoch_qs = []
         epoch_episodes = 0
 
+        action=np.zeros(env.action_space.shape[-1])
+
         for epoch in range(nb_epochs):
             for cycle in range(nb_epoch_cycles):
                 # Perform rollouts.
                 for t_rollout in range(nb_rollout_steps):
                     # Predict next action.
-                    action, q = agent.pi(obs, apply_noise=True, compute_Q=True)
+                    if use_linsolv:
+                        action_hat, q = agent.pi(obs, action, apply_noise=True, compute_Q=True)
+                        action1 = action_process(action_hat)
+                    else:
+                        action, q = agent.pi(obs, apply_noise=True, compute_Q=True)
                     assert action.shape == env.action_space.shape
 
                     # Execute next action.
@@ -100,7 +106,11 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                     # Book-keeping.
                     epoch_actions.append(action)
                     epoch_qs.append(q)
-                    agent.store_transition(obs, action, r, new_obs, done)
+                    if use_linsolv:
+                        agent.store_transition(obs, action, r, new_obs, done, action1)
+                        action=action1
+                    else:
+                        agent.store_transition(obs, action, r, new_obs, done)
                     obs = new_obs
 
                     if done:
@@ -115,6 +125,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
 
                         agent.reset()
                         obs = env.reset()
+                        action_process.reset()
 
                 # Train.
                 epoch_actor_losses = []

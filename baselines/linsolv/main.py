@@ -44,6 +44,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
     # Parse noise_type
     action_noise = None
     param_noise = None
+    action_process = None
     nb_actions = env.action_space.shape[-1]
     for current_noise_type in noise_type.split(','):
         current_noise_type = current_noise_type.strip()
@@ -58,20 +59,18 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
         elif 'ou' in current_noise_type:
             _, stddev = current_noise_type.split('_')
             action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
-        elif 'oulinsolv' in current_noise_type:
-            _, stddev = current_noise_type.split('_')
-            action_noise = OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
         else:
             raise RuntimeError('unknown noise type "{}"'.format(current_noise_type))
 
     # Configure components.
     memory = Memory(limit=int(1e6), action_shape=env.action_space.shape, observation_shape=env.observation_space.shape)
-    critic = Critic(layer_norm=layer_norm)
     if use_linsolv:
-        actor = LinSolvActor(critic,nb_actions, layer_norm=layer_norm)
+        actorcritic = LinSolvActor(critic,nb_actions, layer_norm=layer_norm)
+        action_process=OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
     else:
         actor = Actor(nb_actions, layer_norm=layer_norm)
-        
+        critic = Critic(layer_norm=layer_norm)
+
     # Seed everything to make things reproducible.
     seed = seed + 1000000 * rank
     logger.info('rank {}: seed={}, logdir={}'.format(rank, seed, logger.get_dir()))
@@ -85,7 +84,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
     if rank == 0:
         start_time = time.time()
     training.train(env=env, eval_env=eval_env, param_noise=param_noise,
-        action_noise=action_noise, actor=actor, critic=critic, memory=memory, **kwargs)
+        action_noise=action_noise, actor=actor, critic=critic, memory=memory, actorcritic=actorcritic, action_process=action_process **kwargs)
     env.close()
     if eval_env is not None:
         eval_env.close()

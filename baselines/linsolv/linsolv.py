@@ -65,7 +65,7 @@ class LINSOLV(object):
         gamma=0.99, tau=0.001, normalize_returns=False, enable_popart=False, normalize_observations=True,
         batch_size=128, observation_range=(-5., 5.), action_range=(-1., 1.), return_range=(-np.inf, np.inf),
         adaptive_param_noise=True, adaptive_param_noise_policy_threshold=.1,
-        critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1., use_linsolv=False):
+        critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1., use_linsolv=False, actorcritic=None):
         # Inputs.
         self.obs0 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs0')
         self.obs1 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs1')
@@ -88,6 +88,7 @@ class LINSOLV(object):
         self.observation_range = observation_range
         self.critic = critic
         self.actor = actor
+        self.actorcritic=actorcritic
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
         self.clip_norm = clip_norm
@@ -116,28 +117,50 @@ class LINSOLV(object):
         else:
             self.ret_rms = None
 
-        # Create target networks.
-        target_actor = copy(actor)
-        target_actor.name = 'target_actor'
-        self.target_actor = target_actor
-        target_critic = copy(critic)
-        target_critic.name = 'target_critic'
-        self.target_critic = target_critic
-
         # Create networks and core TF parts that are shared across setup parts.
-        self.actor_tf = actor(normalized_obs0)
-        self.normalized_critic_tf = critic(normalized_obs0, self.actions)
-        self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
-        self.normalized_critic_with_actor_tf = critic(normalized_obs0, self.actor_tf, reuse=True)
-        self.critic_with_actor_tf = denormalize(tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
-        Q_obs1 = denormalize(target_critic(normalized_obs1, target_actor(normalized_obs1)), self.ret_rms)
-        self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
+        if self.use_linsolv:
+            assert actorcritic is not None
+
+            # Create target network.
+            target_actorcritic = copy(actorcritic)
+            target_actorcritic.name = 'target_actorcritic'
+            self.target_actorcritic = target_actorcritic
+
+            self.actor_tf = actorcritic(normalized_obs0,self.actions,rescale=True)
+            self.normalized_critic_with_actor_tf = actorcritic(normalized_obs0, self.actor_tf, rescale=False, reuse=True)
+            self.critic_with_actor_tf = tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]) / self.ret_rms.std
+
+
+            self.normalized_critic_tf = actorcritic(normalized_obs0, self.actions)
+            self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
+            Q_obs1 = denormalize(target_actorcritic(normalized_obs1, target_actorcritic(normalized_obs1,self.actions1)), self.ret_rms)
+            self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
+        else:
+            # Create target networks.
+            target_actor = copy(actor)
+            target_actor.name = 'target_actor'
+            self.target_actor = target_actor
+            target_critic = copy(critic)
+            target_critic.name = 'target_critic'
+            self.target_critic = target_critic
+
+            self.actor_tf = actor(normalized_obs0)
+            self.normalized_critic_tf = critic(normalized_obs0, self.actions)
+            self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
+            self.normalized_critic_with_actor_tf = critic(normalized_obs0, self.actor_tf, reuse=True)
+            self.critic_with_actor_tf = denormalize(tf.clip_by_value(self.normalized_critic_with_actor_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
+            Q_obs1 = denormalize(target_critic(normalized_obs1, target_actor(normalized_obs1)), self.ret_rms)
+            self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
 
         # Set up parts.
         if self.param_noise is not None:
             self.setup_param_noise(normalized_obs0)
-        self.setup_actor_optimizer()
-        self.setup_critic_optimizer()
+        if use_linsolv:
+            self.setup_actorcritic_optimizer()
+            self.setup_critic_optimizer()
+        else:
+            self.setup_actor_optimizer()
+            self.setup_critic_optimizer()
         if self.normalize_returns and self.enable_popart:
             self.setup_popart()
         self.setup_stats()
@@ -177,12 +200,43 @@ class LINSOLV(object):
         self.actor_optimizer = MpiAdam(var_list=self.actor.trainable_vars,
             beta1=0.9, beta2=0.999, epsilon=1e-08)
 
+    def setup_actorcritic_optimizer(self):
+        logger.info('setting up actor optimizer')
+        self.actor_loss = -tf.reduce_mean(self.critic_with_actor_tf)
+        actor_shapes = [var.get_shape().as_list() for var in self.actor.trainable_vars]
+        actor_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in actor_shapes])
+        logger.info('  actor shapes: {}'.format(actor_shapes))
+        logger.info('  actor params: {}'.format(actor_nb_params))
+        self.actor_grads = U.flatgrad(self.actor_loss, self.actor.trainable_vars, clip_norm=self.clip_norm)
+        self.actor_optimizer = MpiAdam(var_list=self.actor.trainable_vars,
+            beta1=0.9, beta2=0.999, epsilon=1e-08)
+
+        logger.info('setting up critic optimizer')
+        normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms), self.return_range[0], self.return_range[1])
+        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
+
+        if self.critic_l2_reg > 0.:
+            critic_reg_vars = [var for var in self.critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
+            for var in critic_reg_vars:
+                logger.info('  regularizing: {}'.format(var.name))
+            logger.info('  applying l2 regularization with {}'.format(self.critic_l2_reg))
+            critic_reg = tc.layers.apply_regularization(
+                tc.layers.l2_regularizer(self.critic_l2_reg),
+                weights_list=critic_reg_vars
+            )
+            self.critic_loss += critic_reg
+        critic_shapes = [var.get_shape().as_list() for var in self.critic.trainable_vars]
+        critic_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in critic_shapes])
+        logger.info('  critic shapes: {}'.format(critic_shapes))
+        logger.info('  critic params: {}'.format(critic_nb_params))
+        self.critic_grads = U.flatgrad(self.critic_loss, self.critic.trainable_vars, clip_norm=self.clip_norm)
+        self.critic_optimizer = MpiAdam(var_list=self.critic.trainable_vars,
+            beta1=0.9, beta2=0.999, epsilon=1e-08)
+
     def setup_critic_optimizer(self):
         logger.info('setting up critic optimizer')
         normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms), self.return_range[0], self.return_range[1])
         self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
-        ## LINSOLV EDIT
-        # self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - tf.log(tf.reduce_mean(tf.exp(normalized_critic_target_tf))) ))
 
         if self.critic_l2_reg > 0.:
             critic_reg_vars = [var for var in self.critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
@@ -256,21 +310,25 @@ class LINSOLV(object):
         self.stats_ops = ops
         self.stats_names = names
 
-    def pi(self, obs, apply_noise=True, compute_Q=True):
+    def pi(self, obs, prev_action=None, apply_noise=True, compute_Q=True):
         if self.param_noise is not None and apply_noise:
             actor_tf = self.perturbed_actor_tf
         else:
             actor_tf = self.actor_tf
-        feed_dict = {self.obs0: [obs]}
+        
+        if use_linsolv:
+            assert prev_action.shape==actor_tf.shape
+            feed_dict = {self.obs0: [obs], self.actions:[prev_action]}
+        else:
+            feed_dict = {self.obs0: [obs]}
+        
         if compute_Q:
             action, q = self.sess.run([actor_tf, self.critic_with_actor_tf], feed_dict=feed_dict)
         else:
             action = self.sess.run(actor_tf, feed_dict=feed_dict)
         action = action.flatten()
-
-        if self.action_noise is not None and self.use_linsolv:
-            action = self.action_noise(action,apply_noise=apply_noise)
-        elif self.action_noise is not None and apply_noise:
+        
+        if self.action_noise is not None and apply_noise:
             noise = self.action_noise()
             assert noise.shape == action.shape
             action += noise
@@ -278,9 +336,9 @@ class LINSOLV(object):
         action = np.clip(action, self.action_range[0], self.action_range[1])
         return action, q
 
-    def store_transition(self, obs0, action, reward, obs1, terminal1):
+    def store_transition(self, obs0, action, reward, obs1, terminal1, action1=None):
         reward *= self.reward_scale
-        self.memory.append(obs0, action, reward, obs1, terminal1)
+        self.memory.append(obs0, action, reward, obs1, terminal1, action1)
         if self.normalize_observations:
             self.obs_rms.update(np.array([obs0]))
 

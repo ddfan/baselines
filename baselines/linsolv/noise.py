@@ -76,7 +76,7 @@ class OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(ActionNoise):
         self.x0 = x0
         self.reset()
 
-    def __call__(self,action_hat=np.zeros(self.mu.shape),apply_noise=True):
+    def __call__(self,action_hat=np.zeros(self.mu.shape),apply_noise=False):
         if noise_on:
             x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape) + action_hat
         else:
