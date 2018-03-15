@@ -16,7 +16,7 @@ from baselines.common.misc_util import (
     boolean_flag,
 )
 import baselines.linsolv.training as training
-from baselines.linsolv.models import Actor, Critic
+from baselines.linsolv.models import Actor, Critic, LinSolvActor
 from baselines.linsolv.memory import Memory
 from baselines.linsolv.noise import *
 
@@ -24,7 +24,7 @@ import gym
 import tensorflow as tf
 from mpi4py import MPI
 
-def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
+def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv **kwargs):
     # Configure things.
     rank = MPI.COMM_WORLD.Get_rank()
     if rank != 0:
@@ -58,14 +58,20 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         elif 'ou' in current_noise_type:
             _, stddev = current_noise_type.split('_')
             action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
+        elif 'oulinsolv' in current_noise_type:
+            _, stddev = current_noise_type.split('_')
+            action_noise = OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
         else:
             raise RuntimeError('unknown noise type "{}"'.format(current_noise_type))
 
     # Configure components.
     memory = Memory(limit=int(1e6), action_shape=env.action_space.shape, observation_shape=env.observation_space.shape)
     critic = Critic(layer_norm=layer_norm)
-    actor = Actor(nb_actions, layer_norm=layer_norm)
-
+    if use_linsolv:
+        actor = LinSolvActor(critic,nb_actions, layer_norm=layer_norm)
+    else:
+        actor = Actor(nb_actions, layer_norm=layer_norm)
+        
     # Seed everything to make things reproducible.
     seed = seed + 1000000 * rank
     logger.info('rank {}: seed={}, logdir={}'.format(rank, seed, logger.get_dir()))
@@ -110,11 +116,12 @@ def parse_args():
     parser.add_argument('--nb-train-steps', type=int, default=50)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-eval-steps', type=int, default=1000)  # per epoch cycle and MPI worker
     parser.add_argument('--nb-rollout-steps', type=int, default=1000)  # per epoch cycle and MPI worker
-    parser.add_argument('--noise-type', type=str, default='adaptive-param_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
+    parser.add_argument('--noise-type', type=str, default='oulinsolv_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--num-timesteps', type=int, default=None)
     boolean_flag(parser, 'evaluation', default=True)
     boolean_flag(parser, 'save-policies', default=True)
     parser.add_argument('--policy-save-interval', type=int, default=100)
+    boolean_flag(parser, 'use-linsolv', default=True)
 
     args = parser.parse_args()
     # we don't directly specify timesteps for this script, so make sure that if we do specify them

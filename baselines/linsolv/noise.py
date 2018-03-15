@@ -55,7 +55,7 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
         self.x0 = x0
         self.reset()
 
-    def __call__(self):
+    def __call__(self:
         x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape)
         self.x_prev = x
         return x
@@ -65,3 +65,27 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
 
     def __repr__(self):
         return 'OrnsteinUhlenbeckActionNoise(mu={}, sigma={})'.format(self.mu, self.sigma)
+
+
+class OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(ActionNoise):
+    def __init__(self, mu, sigma, theta=.15, dt=1e-2, x0=None):
+        self.theta = theta
+        self.mu = mu
+        self.sigma = sigma
+        self.dt = dt
+        self.x0 = x0
+        self.reset()
+
+    def __call__(self,action_hat=np.zeros(self.mu.shape),apply_noise=True):
+        if noise_on:
+            x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape) + action_hat
+        else:
+            x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + action_hat
+        self.x_prev = x
+        return x
+
+    def reset(self):
+        self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
+
+    def __repr__(self):
+        return 'OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu={}, sigma={})'.format(self.mu, self.sigma)

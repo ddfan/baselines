@@ -65,7 +65,7 @@ class LINSOLV(object):
         gamma=0.99, tau=0.001, normalize_returns=False, enable_popart=False, normalize_observations=True,
         batch_size=128, observation_range=(-5., 5.), action_range=(-1., 1.), return_range=(-np.inf, np.inf),
         adaptive_param_noise=True, adaptive_param_noise_policy_threshold=.1,
-        critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1.):
+        critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1., use_linsolv=False):
         # Inputs.
         self.obs0 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs0')
         self.obs1 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs1')
@@ -96,6 +96,7 @@ class LINSOLV(object):
         self.batch_size = batch_size
         self.stats_sample = None
         self.critic_l2_reg = critic_l2_reg
+        self.use_linsolv=use_linsolv
 
         # Observation normalization.
         if self.normalize_observations:
@@ -179,9 +180,9 @@ class LINSOLV(object):
     def setup_critic_optimizer(self):
         logger.info('setting up critic optimizer')
         normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms), self.return_range[0], self.return_range[1])
-        # self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
+        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
         ## LINSOLV EDIT
-        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - tf.log(tf.reduce_mean(tf.exp(normalized_critic_target_tf))) ))
+        # self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - tf.log(tf.reduce_mean(tf.exp(normalized_critic_target_tf))) ))
 
         if self.critic_l2_reg > 0.:
             critic_reg_vars = [var for var in self.critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
@@ -265,12 +266,15 @@ class LINSOLV(object):
             action, q = self.sess.run([actor_tf, self.critic_with_actor_tf], feed_dict=feed_dict)
         else:
             action = self.sess.run(actor_tf, feed_dict=feed_dict)
-            q = None
         action = action.flatten()
-        if self.action_noise is not None and apply_noise:
+
+        if self.action_noise is not None and self.use_linsolv:
+            action = self.action_noise(action,apply_noise=apply_noise)
+        elif self.action_noise is not None and apply_noise:
             noise = self.action_noise()
             assert noise.shape == action.shape
             action += noise
+
         action = np.clip(action, self.action_range[0], self.action_range[1])
         return action, q
 

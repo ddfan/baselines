@@ -71,10 +71,23 @@ class Critic(Model):
             x = tf.layers.dense(x, 1, kernel_initializer=tf.random_uniform_initializer(minval=-3e-3, maxval=3e-3))
         return x
 
-    def grad(self,obs,action):
-        output=self.__call__(tf.stop_gradient(obs),tf.stop_gradient(action),reuse=True)
-        tf.gradients(output,action)
     @property
     def output_vars(self):
         output_vars = [var for var in self.trainable_vars if 'output' in var.name]
         return output_vars
+
+
+class LinSolvActor(Model):
+    def __init__(self, critic, nb_actions, name='actor', layer_norm=True):
+        super(Actor, self).__init__(name=name)
+        self.nb_actions = nb_actions
+        self.layer_norm = critic.layer_norm
+        self.critic=critic
+
+    def __call__(self, obs, action, reuse=False):
+        with tf.variable_scope(self.name) as scope:
+            if reuse:
+                scope.reuse_variables()
+
+            x=tf.gradient(self.critic(obs,action,reuse=True),action)
+        return x
