@@ -1,7 +1,7 @@
 # from mujoco_py import load_model_from_path, MjSim, MjViewer
 # from mujoco_py.modder import TextureModder
 # import os
-# model = load_model_from_path("/home/aeuser/Documents/mujoco-py/xmls/fetch/main.xml")
+# model = load_model_from_path("/home/david/Documents/mujoco-py/xmls/fetch/main.xml")
 # sim = MjSim(model)
 # viewer = MjViewer(sim)
 
@@ -24,7 +24,7 @@ import gym
 import tensorflow as tf
 from mpi4py import MPI
 
-def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs):
+def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, batch_size, **kwargs):
     # Configure things.
     rank = MPI.COMM_WORLD.Get_rank()
     if rank != 0:
@@ -48,6 +48,10 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs)
     actor=None
     critic=None
     nb_actions = env.action_space.shape[-1]
+    if use_linsolv:
+        mu=np.zeros((batch_size,nb_actions))
+    else:
+        mu=np.zeros(nb_actions)
     for current_noise_type in noise_type.split(','):
         current_noise_type = current_noise_type.strip()
         if current_noise_type == 'none':
@@ -57,18 +61,19 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs)
             param_noise = AdaptiveParamNoiseSpec(initial_stddev=float(stddev), desired_action_stddev=float(stddev))
         elif 'normal' in current_noise_type:
             _, stddev = current_noise_type.split('_')
-            action_noise = NormalActionNoise(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
+            action_noise = NormalActionNoise(mu=mu, sigma=float(stddev) * np.ones(nb_actions))
         elif 'ou' in current_noise_type:
             _, stddev = current_noise_type.split('_')
-            action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
+            action_noise = OrnsteinUhlenbeckActionNoise(mu=mu, sigma=float(stddev) * np.ones(nb_actions))
         else:
             raise RuntimeError('unknown noise type "{}"'.format(current_noise_type))
 
     # Configure components.
-    memory = Memory(limit=int(1e6), action_shape=env.action_space.shape, observation_shape=env.observation_space.shape)
+    memory = Memory(limit=int(1e6), action_shape=env.action_space.shape, observation_shape=env.observation_space.shape,use_linsolv=use_linsolv)
+    actorcritic=None
     if use_linsolv:
-        actorcritic = LinSolvActorCritic(nb_actions, layer_norm=layer_norm)
-        action_process = OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(stddev) * np.ones(nb_actions))
+        actorcritic = LinSolvActorCritic(nb_actions, layer_norm=layer_norm, batch_size=batch_size)
+        action_process = OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(mu=np.zeros(nb_actions), sigma=float(0.9) * np.ones(nb_actions))
     else:
         actor = Actor(nb_actions, layer_norm=layer_norm)
         critic = Critic(layer_norm=layer_norm)
@@ -76,6 +81,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs)
     # Seed everything to make things reproducible.
     seed = seed + 1000000 * rank
     logger.info('rank {}: seed={}, logdir={}'.format(rank, seed, logger.get_dir()))
+    if use_linsolv:
+        logger.info('Using linsolv.')
     tf.reset_default_graph()
     set_global_seeds(seed)
     env.seed(seed)
@@ -86,7 +93,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs)
     if rank == 0:
         start_time = time.time()
     training.train(env=env, eval_env=eval_env, param_noise=param_noise,
-        action_noise=action_noise, actor=actor, critic=critic, memory=memory, actorcritic=actorcritic, action_process=action_process, use_linsolv=use_linsolv, **kwargs)
+        action_noise=action_noise, actor=actor, critic=critic, memory=memory,
+        actorcritic=actorcritic, action_process=action_process, use_linsolv=use_linsolv, batch_size=batch_size, **kwargs)
     env.close()
     if eval_env is not None:
         eval_env.close()
@@ -97,7 +105,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, use_linsolv, **kwargs)
 def parse_args():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--env-id', type=str, default='Swimmer-v2')
+    parser.add_argument('--env-id', type=str, default='Pendulum-v0')
     boolean_flag(parser, 'render-eval', default=False)
     boolean_flag(parser, 'layer-norm', default=True)
     boolean_flag(parser, 'render', default=False)
@@ -110,14 +118,15 @@ def parse_args():
     parser.add_argument('--critic-lr', type=float, default=1e-3)
     boolean_flag(parser, 'popart', default=False)
     parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--reward-scale', type=float, default=1.)
+    parser.add_argument('--reward-scale', type=float, default=1)
     parser.add_argument('--clip-norm', type=float, default=None)
-    parser.add_argument('--nb-epochs', type=int, default=50)  # with default settings, perform 1M steps total
-    parser.add_argument('--nb-epoch-cycles', type=int, default=1)
+    parser.add_argument('--nb-epochs', type=int, default=100)  # with default settings, perform 1M steps total
+    parser.add_argument('--nb-epoch-cycles', type=int, default=2)
     parser.add_argument('--nb-train-steps', type=int, default=50)  # per epoch cycle and MPI worker
-    parser.add_argument('--nb-eval-steps', type=int, default=1000)  # per epoch cycle and MPI worker
-    parser.add_argument('--nb-rollout-steps', type=int, default=1000)  # per epoch cycle and MPI worker
-    parser.add_argument('--noise-type', type=str, default='normal_0.001')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
+    parser.add_argument('--nb-eval-steps', type=int, default=100)  # per epoch cycle and MPI worker
+    parser.add_argument('--nb-rollout-steps', type=int, default=100)  # per epoch cycle and MPI worker
+    parser.add_argument('--noise-type', type=str, default='normal_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
+    # parser.add_argument('--noise-type', type=str, default='ou_0.2')  # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--num-timesteps', type=int, default=None)
     boolean_flag(parser, 'evaluation', default=True)
     boolean_flag(parser, 'save-policies', default=True)

@@ -76,12 +76,13 @@ class Critic(Model):
         return output_vars
 
 class LinSolvActorCritic(Model):
-    def __init__(self, nb_actions, name='actorcritic', layer_norm=True):
+    def __init__(self, nb_actions, name='actorcritic', layer_norm=True, batch_size=64):
         super(LinSolvActorCritic, self).__init__(name=name)
         self.layer_norm = layer_norm
         self.nb_actions = nb_actions
+        self.batch_size = batch_size
 
-    def __call__(self, obs, action, reuse=False, rescale=False, return_action=False):
+    def __call__(self, obs, action, reuse=False, return_action=False):
         with tf.variable_scope(self.name) as scope:
             if reuse:
                 scope.reuse_variables()
@@ -91,7 +92,10 @@ class LinSolvActorCritic(Model):
             if self.layer_norm:
                 x = tc.layers.layer_norm(x, center=True, scale=True)
             x = tf.nn.relu(x)
-            x = tf.concat([x, action], axis=-1)
+
+            action_list=tf.unstack(action)
+            action_joined=tf.stack(action_list)
+            x = tf.concat([x, action_joined], axis=-1)
             x = tf.layers.dense(x, 64)
             if self.layer_norm:
                 x = tc.layers.layer_norm(x, center=True, scale=True)
@@ -101,11 +105,11 @@ class LinSolvActorCritic(Model):
             
             if return_action:
                 #calculate action as gradient of critic w.r.t action input, scaled.
-                all_actions=tf.map_fn(lambda q_: tf.concat([tf.gradients(q_[i],action) for i in range(self.nb_actions)],axis=0), q)
-                if rescale:
-                    scale_action=tf.get_variable('scale_action',[self.nb_actions])
-                    shift_action=tf.get_variable('shift_action',[self.nb_actions])
-                    all_actions=tf.multiply(all_actions,scale_action)+shift_action
+                all_actions=tf.stack([tf.gradients(q[i,0],action_list[i])[0] for i in range(self.batch_size)],axis=0)
+
+                scale_action=tf.get_variable('scale_action',[1])
+                # shift_action=tf.get_variable('shift_action',[self.nb_actions])
+                all_actions=all_actions*scale_action
 
                 return q,all_actions
 

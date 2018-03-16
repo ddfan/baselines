@@ -2,11 +2,12 @@ import os
 import time
 from collections import deque
 import pickle
+from copy import copy
+from progress.bar import Bar
 
 from baselines.linsolv.linsolv import LINSOLV
 import baselines.common.tf_util as U
 from baselines.common.mpi_moments import mpi_moments
-
 
 from baselines import logger
 import numpy as np
@@ -24,7 +25,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
     normalize_returns, normalize_observations, critic_l2_reg, actor_lr, critic_lr, action_noise,
     popart, gamma, clip_norm, nb_train_steps, nb_rollout_steps, nb_eval_steps, batch_size, memory,
     tau=0.01, eval_env=None, param_noise_adaption_interval=50, save_policies=False, policy_save_interval=10,
-    action_process=None, use_linsolv=False, actorcritic=None):
+    action_process=None, use_linsolv=False, actorcritic=None, action_range=(-1., 1.)):
     rank = MPI.COMM_WORLD.Get_rank()
 
     latest_policy_path = os.path.join(logger.get_dir(), 'policy_latest')
@@ -79,16 +80,28 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
         epoch_qs = []
         epoch_episodes = 0
 
-        action=np.zeros(env.action_space.shape[-1])
+        if use_linsolv:
+            action=np.zeros(env.action_space.shape[-1])
+            epoch_actions_hat = [] 
+            if eval_env is not None:
+                eval_action_process=copy(action_process)
 
         for epoch in range(nb_epochs):
+            bar = Bar('Training', max=nb_epoch_cycles*nb_rollout_steps)
             for cycle in range(nb_epoch_cycles):
                 # Perform rollouts.
                 for t_rollout in range(nb_rollout_steps):
+                    bar.next()
                     # Predict next action.
                     if use_linsolv:
-                        action_hat, q = agent.pi(obs, action, apply_noise=True, compute_Q=True)
-                        action1 = action_process(action_hat)
+                        #we have to feed in size (batch_size,obssize), (batch_size, action_size) because the tensor sizes are fixed.  bad tensorflow.
+                        obs_rep=np.tile(obs,(batch_size,1))
+                        action_rep=np.tile(action,(batch_size,1))
+                        action_hat_rep, q_rep = agent.pi(obs_rep, action_rep, apply_noise=True, compute_Q=True)
+                        action_hat=action_hat_rep[0,:]
+                        q=q_rep[0,:]
+                        action1 = action_process(action_hat, apply_noise=False)
+                        action1 = np.clip(action1, action_range[0],action_range[1])
                     else:
                         action, q = agent.pi(obs, apply_noise=True, compute_Q=True)
                     assert action.shape == env.action_space.shape
@@ -108,6 +121,7 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                     epoch_actions.append(action)
                     epoch_qs.append(q)
                     if use_linsolv:
+                        epoch_actions_hat.append(action_hat)
                         agent.store_transition(obs, action, r, new_obs, done, action1)
                         action=action1
                     else:
@@ -126,7 +140,8 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
 
                         agent.reset()
                         obs = env.reset()
-                        action_process.reset()
+                        if use_linsolv:
+                            action_process.reset()
 
                 # Train.
                 epoch_actor_losses = []
@@ -146,22 +161,38 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
                 # Evaluate.
                 eval_episode_rewards = []
                 eval_qs = []
+                if use_linsolv:
+                    eval_action=np.zeros(env.action_space.shape[-1])
                 if eval_env is not None:
                     eval_episode_reward = 0.
                     for t_rollout in range(nb_eval_steps):
-                        eval_action, eval_q = agent.pi(eval_obs, apply_noise=False, compute_Q=True)
+                        if use_linsolv:
+                            eval_obs_rep=np.tile(eval_obs,(batch_size,1))
+                            eval_action_rep=np.tile(eval_action,(batch_size,1))
+                            eval_action_hat_rep, q_rep = agent.pi(eval_obs_rep, eval_action_rep, apply_noise=False, compute_Q=True)
+                            eval_action_hat=action_hat_rep[0,:]
+                            eval_q=q_rep[0,:]
+                            eval_action1 = action_process(action_hat, apply_noise=False)
+                            eval_action1 = np.clip(action1, action_range[0],action_range[1])
+                        else:
+                            eval_action, eval_q = agent.pi(eval_obs, apply_noise=False, compute_Q=True)
                         eval_obs, eval_r, eval_done, eval_info = eval_env.step(max_action * eval_action)  # scale for execution in env (as far as DDPG is concerned, every action is in [-1, 1])
                         if render_eval:
                             eval_env.render()
                         eval_episode_reward += eval_r
 
                         eval_qs.append(eval_q)
+                        if use_linsolv:
+                            eval_action=eval_action1
                         if eval_done:
                             eval_obs = eval_env.reset()
                             eval_episode_rewards.append(eval_episode_reward)
                             eval_episode_rewards_history.append(eval_episode_reward)
                             eval_episode_reward = 0.
+                            if use_linsolv:
+                                eval_action_process.reset()
 
+            bar.finish()
             mpi_size = MPI.COMM_WORLD.Get_size()
             # Log stats.
             # XXX shouldn't call np.mean on variable length lists
@@ -172,6 +203,9 @@ def train(env, nb_epochs, nb_epoch_cycles, render_eval, reward_scale, render, pa
             combined_stats['rollout/return_history'] = np.mean(episode_rewards_history)
             combined_stats['rollout/episode_steps'] = np.mean(epoch_episode_steps)
             combined_stats['rollout/actions_mean'] = np.mean(epoch_actions)
+            if use_linsolv:
+                combined_stats['rollout/actions_hat_mean'] = np.mean(epoch_actions_hat)
+                combined_stats['rollout/actions_hat_std'] = np.std(epoch_actions_hat)
             combined_stats['rollout/Q_mean'] = np.mean(epoch_qs)
             combined_stats['train/loss_actor'] = np.mean(epoch_actor_losses)
             combined_stats['train/loss_critic'] = np.mean(epoch_critic_losses)

@@ -40,13 +40,13 @@ def array_min2d(x):
 
 
 class Memory(object):
-    def __init__(self, limit, action_shape, observation_shape, sarsa=False):
+    def __init__(self, limit, action_shape, observation_shape, use_linsolv=False):
         self.limit = limit
-        self.sarsa=sarsa
+        self.use_linsolv=use_linsolv
 
         self.observations0 = RingBuffer(limit, shape=observation_shape)
         self.actions = RingBuffer(limit, shape=action_shape)
-        if self.sarsa:
+        if self.use_linsolv:
             self.actions1 = RingBuffer(limit, shape=action_shape)
         self.rewards = RingBuffer(limit, shape=(1,))
         self.terminals1 = RingBuffer(limit, shape=(1,))
@@ -59,12 +59,12 @@ class Memory(object):
         obs0_batch = self.observations0.get_batch(batch_idxs)
         obs1_batch = self.observations1.get_batch(batch_idxs)
         action_batch = self.actions.get_batch(batch_idxs)
-        if self.sarsa:
+        if self.use_linsolv:
             action1_batch = self.actions1.get_batch(batch_idxs)
         reward_batch = self.rewards.get_batch(batch_idxs)
         terminal1_batch = self.terminals1.get_batch(batch_idxs)
 
-        if self.sarsa:
+        if self.use_linsolv:
             result = {
                 'obs0': array_min2d(obs0_batch),
                 'obs1': array_min2d(obs1_batch),
@@ -89,7 +89,7 @@ class Memory(object):
         
         self.observations0.append(obs0)
         self.actions.append(action)
-        if self.sarsa:
+        if self.use_linsolv:
             assert action1 is not None
             self.actions1.append(action1)
         self.rewards.append(reward)

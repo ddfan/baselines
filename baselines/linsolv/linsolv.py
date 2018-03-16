@@ -17,9 +17,11 @@ def normalize(x, stats):
     return (x - stats.mean) / stats.std
 
 
-def denormalize(x, stats):
+def denormalize(x, stats, std_only=False):
     if stats is None:
         return x
+    elif std_only:
+        return x * stats.std
     return x * stats.std + stats.mean
 
 def reduce_std(x, axis=None, keepdims=False):
@@ -67,13 +69,17 @@ class LINSOLV(object):
         adaptive_param_noise=True, adaptive_param_noise_policy_threshold=.1,
         critic_l2_reg=0., actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1., use_linsolv=False, actorcritic=None):
         # Inputs.
-        self.obs0 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs0')
-        self.obs1 = tf.placeholder(tf.float32, shape=(None,) + observation_shape, name='obs1')
-        self.terminals1 = tf.placeholder(tf.float32, shape=(None, 1), name='terminals1')
-        self.rewards = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
-        self.actions = tf.placeholder(tf.float32, shape=(None,) + action_shape, name='actions')
-        self.actions1 = tf.placeholder(tf.float32, shape=(None,) + action_shape, name='actions1')
-        self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
+        if use_linsolv:
+            ph_batch_size=batch_size
+        else:
+            ph_batch_size=None
+        self.obs0 = tf.placeholder(tf.float32, shape=(ph_batch_size,) + observation_shape, name='obs0')
+        self.obs1 = tf.placeholder(tf.float32, shape=(ph_batch_size,) + observation_shape, name='obs1')
+        self.terminals1 = tf.placeholder(tf.float32, shape=(ph_batch_size, 1), name='terminals1')
+        self.rewards = tf.placeholder(tf.float32, shape=(ph_batch_size, 1), name='rewards')
+        self.actions = tf.placeholder(tf.float32, shape=(ph_batch_size,) + action_shape, name='actions')
+        self.actions1 = tf.placeholder(tf.float32, shape=(ph_batch_size,) + action_shape, name='actions1')
+        self.critic_target = tf.placeholder(tf.float32, shape=(ph_batch_size, 1), name='critic_target')
         self.param_noise_stddev = tf.placeholder(tf.float32, shape=(), name='param_noise_stddev')
 
         # Parameters.
@@ -93,9 +99,9 @@ class LINSOLV(object):
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
         self.clip_norm = clip_norm
+        self.batch_size = batch_size
         self.enable_popart = enable_popart
         self.reward_scale = reward_scale
-        self.batch_size = batch_size
         self.stats_sample = None
         self.critic_l2_reg = critic_l2_reg
         self.use_linsolv=use_linsolv
@@ -128,14 +134,15 @@ class LINSOLV(object):
             self.target_actorcritic = target_actorcritic
 
             # setup stuff for actor loss
-            self.normalized_critic_tf, self.actor_tf = actorcritic(normalized_obs0,self.actions,rescale=True,return_action=True)
-            _,self.normalized_unscaled_critic_with_actor_tf = actorcritic(normalized_obs0, self.actor_tf, rescale=False, reuse=True)            
-            self.unscaled_critic_with_actor_tf = tf.clip_by_value(self.normalized_unscaled_critic_with_actor_tf, self.return_range[0], self.return_range[1]) / self.ret_rms.std
+            self.normalized_critic_tf, self.actor_tf = actorcritic(normalized_obs0,self.actions,return_action=True)
+            self.normalized_unscaled_critic_with_actor_tf = actorcritic(normalized_obs0, self.actor_tf, reuse=True)            
+            self.unscaled_critic_with_actor_tf = denormalize(tf.clip_by_value(self.normalized_unscaled_critic_with_actor_tf, self.return_range[0], self.return_range[1]), self.ret_rms, std_only=True)
             self.critic_with_actor_tf=tf.stop_gradient(self.unscaled_critic_with_actor_tf) * self.actor_tf
 
             # setup stuff for critic loss
             self.critic_tf = denormalize(tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]), self.ret_rms)
-            Q_obs1 = denormalize(target_actorcritic(normalized_obs1, target_actorcritic(normalized_obs1,self.actions1)), self.ret_rms)
+            _,target_action_from_policy=target_actorcritic(normalized_obs1,self.actions1,return_action=True)
+            Q_obs1 = denormalize(target_actorcritic(normalized_obs1,target_action_from_policy,reuse=True), self.ret_rms)
             self.target_Q = self.rewards + (1. - self.terminals1) * gamma * Q_obs1
 
         else:
@@ -158,18 +165,23 @@ class LINSOLV(object):
         # Set up parts.
         if self.param_noise is not None:
             self.setup_param_noise(normalized_obs0)
-            self.setup_actor_optimizer()
-            self.setup_critic_optimizer()
+        self.setup_actor_optimizer()
+        self.setup_critic_optimizer()
         if self.normalize_returns and self.enable_popart:
             self.setup_popart()
         self.setup_stats()
         self.setup_target_network_updates()
 
     def setup_target_network_updates(self):
-        actor_init_updates, actor_soft_updates = get_target_updates(self.actor.vars, self.target_actor.vars, self.tau)
-        critic_init_updates, critic_soft_updates = get_target_updates(self.critic.vars, self.target_critic.vars, self.tau)
-        self.target_init_updates = [actor_init_updates, critic_init_updates]
-        self.target_soft_updates = [actor_soft_updates, critic_soft_updates]
+        if self.use_linsolv:
+            actorcritic_init_updates, actorcritic_soft_updates = get_target_updates(self.actorcritic.vars, self.target_actorcritic.vars, self.tau)
+            self.target_init_updates = [actorcritic_init_updates]
+            self.target_soft_updates = [actorcritic_soft_updates]
+        else:
+            actor_init_updates, actor_soft_updates = get_target_updates(self.actor.vars, self.target_actor.vars, self.tau)
+            critic_init_updates, critic_soft_updates = get_target_updates(self.critic.vars, self.target_critic.vars, self.tau)
+            self.target_init_updates = [actor_init_updates, critic_init_updates]
+            self.target_soft_updates = [actor_soft_updates, critic_soft_updates]
 
     def setup_param_noise(self, normalized_obs0):
         assert self.param_noise is not None
@@ -190,13 +202,17 @@ class LINSOLV(object):
 
     def setup_actor_optimizer(self):
         logger.info('setting up actor optimizer')
+        if self.use_linsolv:
+            actor=self.actorcritic
+        else:
+            actor=self.actor
         self.actor_loss = -tf.reduce_mean(self.critic_with_actor_tf)
-        actor_shapes = [var.get_shape().as_list() for var in self.actor.trainable_vars]
+        actor_shapes = [var.get_shape().as_list() for var in actor.trainable_vars]
         actor_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in actor_shapes])
         logger.info('  actor shapes: {}'.format(actor_shapes))
         logger.info('  actor params: {}'.format(actor_nb_params))
-        self.actor_grads = U.flatgrad(self.actor_loss, self.actor.trainable_vars, clip_norm=self.clip_norm)
-        self.actor_optimizer = MpiAdam(var_list=self.actor.trainable_vars,
+        self.actor_grads = U.flatgrad(self.actor_loss, actor.trainable_vars, clip_norm=self.clip_norm)
+        self.actor_optimizer = MpiAdam(var_list=actor.trainable_vars,
             beta1=0.9, beta2=0.999, epsilon=1e-08)
 
     def setup_critic_optimizer(self):
@@ -204,8 +220,12 @@ class LINSOLV(object):
         normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms), self.return_range[0], self.return_range[1])
         self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
 
+        if self.use_linsolv:
+            critic=self.actorcritic
+        else:
+            critic=self.critic
         if self.critic_l2_reg > 0.:
-            critic_reg_vars = [var for var in self.critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
+            critic_reg_vars = [var for var in critic.trainable_vars if 'kernel' in var.name and 'output' not in var.name]
             for var in critic_reg_vars:
                 logger.info('  regularizing: {}'.format(var.name))
             logger.info('  applying l2 regularization with {}'.format(self.critic_l2_reg))
@@ -214,12 +234,12 @@ class LINSOLV(object):
                 weights_list=critic_reg_vars
             )
             self.critic_loss += critic_reg
-        critic_shapes = [var.get_shape().as_list() for var in self.critic.trainable_vars]
+        critic_shapes = [var.get_shape().as_list() for var in critic.trainable_vars]
         critic_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in critic_shapes])
         logger.info('  critic shapes: {}'.format(critic_shapes))
         logger.info('  critic params: {}'.format(critic_nb_params))
-        self.critic_grads = U.flatgrad(self.critic_loss, self.critic.trainable_vars, clip_norm=self.clip_norm)
-        self.critic_optimizer = MpiAdam(var_list=self.critic.trainable_vars,
+        self.critic_grads = U.flatgrad(self.critic_loss, critic.trainable_vars, clip_norm=self.clip_norm)
+        self.critic_optimizer = MpiAdam(var_list=critic.trainable_vars,
             beta1=0.9, beta2=0.999, epsilon=1e-08)
 
     def setup_popart(self):
@@ -230,7 +250,13 @@ class LINSOLV(object):
         new_mean = self.ret_rms.mean
 
         self.renormalize_Q_outputs_op = []
-        for vs in [self.critic.output_vars, self.target_critic.output_vars]:
+        if self.use_linsolv:
+            critic = self.actorcritic
+            target_critic = self.target_actorcritic
+        else:
+            critic = self.critic
+            target_critic = self.target_critic
+        for vs in [critic.output_vars, target_critic.output_vars]:
             assert len(vs) == 2
             M, b = vs
             assert 'kernel' in M.name
@@ -282,9 +308,9 @@ class LINSOLV(object):
         else:
             actor_tf = self.actor_tf
         
-        if use_linsolv:
+        if self.use_linsolv:
             assert prev_action.shape==actor_tf.shape
-            feed_dict = {self.obs0: [obs], self.actions:[prev_action]}
+            feed_dict = {self.obs0: obs, self.actions:prev_action}
         else:
             feed_dict = {self.obs0: [obs]}
         
@@ -292,14 +318,18 @@ class LINSOLV(object):
             action, q = self.sess.run([actor_tf, self.critic_with_actor_tf], feed_dict=feed_dict)
         else:
             action = self.sess.run(actor_tf, feed_dict=feed_dict)
-        action = action.flatten()
         
+        if self.use_linsolv is False:
+            action = action.flatten()
+
         if self.action_noise is not None and apply_noise:
             noise = self.action_noise()
             assert noise.shape == action.shape
             action += noise
+        
+        if self.use_linsolv is False:
+            action = np.clip(action, self.action_range[0], self.action_range[1])
 
-        action = np.clip(action, self.action_range[0], self.action_range[1])
         return action, q
 
     def store_transition(self, obs0, action, reward, obs1, terminal1, action1=None):
@@ -311,13 +341,18 @@ class LINSOLV(object):
     def train(self):
         # Get a batch.
         batch = self.memory.sample(batch_size=self.batch_size)
-
-        if self.normalize_returns and self.enable_popart:
-            old_mean, old_std, target_Q = self.sess.run([self.ret_rms.mean, self.ret_rms.std, self.target_Q], feed_dict={
-                self.obs1: batch['obs1'],
+        if self.use_linsolv:
+            feed_dict_target={self.obs1: batch['obs1'],
                 self.rewards: batch['rewards'],
                 self.terminals1: batch['terminals1'].astype('float32'),
-            })
+                self.actions1: batch['actions1']}
+        else:
+            feed_dict_target={self.obs1: batch['obs1'],
+                self.rewards: batch['rewards'],
+                self.terminals1: batch['terminals1'].astype('float32')}
+
+        if self.normalize_returns and self.enable_popart:
+            old_mean, old_std, target_Q = self.sess.run([self.ret_rms.mean, self.ret_rms.std, self.target_Q], feed_dict=feed_dict_target)
             self.ret_rms.update(target_Q.flatten())
             self.sess.run(self.renormalize_Q_outputs_op, feed_dict={
                 self.old_std : np.array([old_std]),
@@ -334,19 +369,20 @@ class LINSOLV(object):
             # print(target_Q_new, target_Q, new_mean, new_std)
             # assert (np.abs(target_Q - target_Q_new) < 1e-3).all()
         else:
-            target_Q = self.sess.run(self.target_Q, feed_dict={
-                self.obs1: batch['obs1'],
-                self.rewards: batch['rewards'],
-                self.terminals1: batch['terminals1'].astype('float32'),
-            })
+            target_Q = self.sess.run(self.target_Q, feed_dict=feed_dict_target)
 
+        if self.use_linsolv:
+            feed_dict={self.obs0: batch['obs0'],
+                self.actions: batch['actions'],
+                self.critic_target: target_Q,
+                self.actions1: batch['actions1']}
+        else:
+            feed_dict={self.obs0: batch['obs0'],
+                self.actions: batch['actions'],
+                self.critic_target: target_Q}
         # Get all gradients and perform a synced update.
         ops = [self.actor_grads, self.actor_loss, self.critic_grads, self.critic_loss]
-        actor_grads, actor_loss, critic_grads, critic_loss = self.sess.run(ops, feed_dict={
-            self.obs0: batch['obs0'],
-            self.actions: batch['actions'],
-            self.critic_target: target_Q,
-        })
+        actor_grads, actor_loss, critic_grads, critic_loss = self.sess.run(ops, feed_dict=feed_dict)
         self.actor_optimizer.update(actor_grads, stepsize=self.actor_lr)
         self.critic_optimizer.update(critic_grads, stepsize=self.critic_lr)
 

@@ -39,7 +39,7 @@ class NormalActionNoise(ActionNoise):
         self.sigma = sigma
 
     def __call__(self):
-        return np.random.normal(self.mu, self.sigma)
+        return np.random.normal(self.mu, self.sigma, size=self.mu.shape)
 
     def __repr__(self):
         return 'NormalActionNoise(mu={}, sigma={})'.format(self.mu, self.sigma)
@@ -77,10 +77,10 @@ class OrnsteinUhlenbeckIntegratedActionNoiseForLinSolv(ActionNoise):
         self.reset()
 
     def __call__(self,action_hat,apply_noise):
-        if noise_on:
-            x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape) + action_hat
+        if apply_noise:
+            x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape) + action_hat * self.dt
         else:
-            x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + action_hat
+            x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + action_hat * self.dt
         self.x_prev = x
         return x
 
